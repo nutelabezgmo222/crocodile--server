@@ -14,8 +14,9 @@ class RoomStore {
   isRoomAvailable(roomID, userID) {}
   kickUser(roomID, hostID, userID) {}
   setRoomWord(roomID, word) {}
-  changeLeader(roomID) { }
-  removeRoom(roomID) { }
+  changeLeader(roomID) {}
+  removeRoom(roomID) {}
+  setRoomStatus(roomID, isPrivate) { }
 }
 
 export class InMemoryRoomStore extends RoomStore {
@@ -33,6 +34,16 @@ export class InMemoryRoomStore extends RoomStore {
     this.getRoom = this.roomDecorator(this.getRoom);
     this.changeLeader = this.roomDecorator(this.changeLeader);
     this.removeRoom = this.roomDecorator(this.removeRoom);
+    this.setRoomStatus = this.roomDecorator(this.setRoomStatus);
+  }
+  setRoomStatus(roomID, isPrivate) {
+    let room = this.rooms.allRooms[roomID];
+    room.isRoomOpen = !isPrivate;
+    let newOpenedRoomsID = this.rooms.openedRoomsID.filter(id => id !== roomID);
+    if (!isPrivate) {
+      newOpenedRoomsID.push(roomID);
+    }
+    this.rooms.openedRoomsID = newOpenedRoomsID;
   }
   removeRoom(roomID) {
     this.rooms.openedRoomsID = this.rooms.openedRoomsID.filter(id => id !== roomID);
@@ -48,7 +59,9 @@ export class InMemoryRoomStore extends RoomStore {
     let room = this.rooms.allRooms[roomID];
     if (room.users.length) {
       let nextLeaderIndex;
-      let curLeaderIndex = room.users.findIndex((user) => user.leader);
+      let curLeaderIndex = room.users.findIndex(
+        (user) => user.userID === room.roomLeaderID
+      );
 
       if (curLeaderIndex === -1) {
         nextLeaderIndex = 0;
@@ -57,9 +70,8 @@ export class InMemoryRoomStore extends RoomStore {
           curLeaderIndex + 1 <= room.users.length - 1
             ? curLeaderIndex + 1
             : 0;
-        room.users[curLeaderIndex].leader = false;
       }
-      room.users[nextLeaderIndex].leader = true;
+      room.roomLeaderID = room.users[nextLeaderIndex].userID;
     } else { 
       this.removeRoom(roomID);
     }
@@ -141,8 +153,7 @@ export class InMemoryRoomStore extends RoomStore {
         userID: user.userID,
         socketID: user.socketID,
         avatarID: user.avatarID,
-        pointCount: 10,
-        leader: false,
+        pointCount: 0,
       });
       response.hostID = this.rooms.allRooms[roomID].roomHostID;
       return response;
@@ -157,13 +168,16 @@ export class InMemoryRoomStore extends RoomStore {
       roomID: randomId(),
       roomHostID: host.userID,
       roomHostSocketID: host.socketID,
+      roomLeaderID: null,
       users: [],
+      messages: [],
       roomWord: "",
       timer: null,
-      gameCounter: 60,
+      gameCounter: 180,
       blockedUsersID: [],
       isRoomOpen: isRoomOpen,
       isGameStarted: false,
+      isRoundStarted: false
     };
     this.rooms.allRooms[room.roomID] = room;
     if (isRoomOpen) {
@@ -171,7 +185,18 @@ export class InMemoryRoomStore extends RoomStore {
     }
     return room.roomID;
   }
-  findOpenRoom() {}
+  findOpenRoom() {
+    let url = this.rooms.openedRoomsID.find(id => {
+      if (this.rooms.allRooms[id].users.length < 5) {
+        return true;
+      }
+      return false;
+    })
+    if (!url) {
+      url = null;
+    }
+    return url;
+  }
 
   roomDecorator(func) {
     return function (roomID, ...rest) {
