@@ -70,6 +70,8 @@ io.on("connection", function (socket) {
     avatarID: socket.avatarID,
   })
 
+  io.emit("newPlayer", { totalPlayers: io.engine.clientsCount });
+
   socket.on("draw", (figure) => {
     let room = roomStore.getRoom(socket.roomID);
     broadcastToUsers(room.users, "draw", figure);
@@ -79,26 +81,15 @@ io.on("connection", function (socket) {
     callback(roomStore);
   });
 
-  socket.on("game:start", () => {
+  socket.on("image:save", (img) => {
+    saveImage(img, socket);
+  });
+  socket.on("image:change", (img) => {
+    saveImage(img, socket);
     let room = roomStore.getRoom(socket.roomID);
     let users = room.users;
-    room.isGameStarted = true;
-    room.users[0].leader = true;
-    broadcastToUsers(users, "game:start", {users});
-  });
-
-  socket.on("image:save", (img) => {
-    try {
-      const data = img.img.replace("data:image/png;base64,", "");
-      fs.writeFileSync(
-        path.resolve(__dirname, "files", `${socket.roomID}.jpg`),
-        data,
-        "base64"
-      );
-    } catch (e) {
-      console.log(e);
-    }
-  });
+    broadcastToUsers(users, "image:change", img);
+  })
   socket.on("image:get", (callback) => {
     try {
       const file = fs.readFileSync(
@@ -111,12 +102,38 @@ io.on("connection", function (socket) {
     }
   })
 
+  socket.on("game:start", () => {
+    let room = roomStore.getRoom(socket.roomID);
+    let users = room.users;
+    room.isGameStarted = true;
+    roomStore.changeLeader(room.roomID);
+    broadcastToUsers(users, "game:start", { users, leaderID: room.roomLeaderID });
+  });
+  socket.on("game:findGame", (callback) => {
+    let timerCounter = 0;
+    let timer = setInterval(() => {
+      timerCounter++;
+      let url = roomStore.findOpenRoom();
+      if (url !== null) {
+        clearInterval(timer);
+        callback(url);
+      }
+      if (timerCounter >= 10) {
+        clearInterval(timer);
+        callback(null);
+      }
+    }, 1000)
+  })
+  socket.on("game:private", (isPrivate) => {
+    roomStore.setRoomStatus(socket.roomID, isPrivate);
+  })
   socket.on("game:wordChoose", (word) => {
     let roomID = socket.roomID;
     let room = roomStore.getRoom(roomID);
     let users = roomStore.getRoomUsers(roomID);
     room.roomWord = word;
-    room.gameCounter = 60; // round counter
+    room.gameCounter = 180; // round counter
+    room.isRoundStarted = true;
 
     let letters = new Array(room.roomWord.length).fill("");
 
@@ -131,25 +148,19 @@ io.on("connection", function (socket) {
 
     room.timer = setInterval(() => {
       room.gameCounter = room.gameCounter - 1;
-      if (room.gameCounter === 40) {
+      if (room.gameCounter === 150) {
         broadcastToUsers(users, "game:newLetter", letters);
       }
-      if (room.gameCounter === 35) {
+      if (room.gameCounter === 120) {
         letters[0] = room.roomWord[0];
         broadcastToUsers(users, "game:newLetter", letters);
       }
-      if (room.gameCounter === 30) {
+      if (room.gameCounter === 90) {
         letters[letters.length - 1] = room.roomWord[room.roomWord.length - 1];
         broadcastToUsers(users, "game:newLetter", letters);
       }
       if (room.gameCounter === 0) {
-        clearInterval(room.timer);
-        roomStore.changeLeader(room.roomID);
-        broadcastToUsers(users, "game:endRound", {
-          users: room.users,
-          word: room.roomWord,
-          winner: null,
-        });
+        roomEndRound(room.roomID);
       }
     }, 1000);
 
@@ -157,16 +168,13 @@ io.on("connection", function (socket) {
   socket.on("game:checkWord", (msg) => {
     let roomID = socket.roomID;
     let room = roomStore.getRoom(roomID);
+    let users = room.users;
+    room.messages.push(msg);
 
-    if (room.roomWord === msg) {
-      let users = roomStore.getRoomUsers(roomID);
-      clearInterval(room.timer);
-      roomStore.changeLeader(room.roomID);
-      broadcastToUsers(users, "game:endRound", {
-        users: room.users,
-        word: room.roomWord,
-        winner: socket.username,
-      });
+    broadcastToUsers(users, "game:newMessage", msg);
+
+    if (room.roomWord === msg.text) {
+      roomEndRound(room.roomID, socket.username);
     }
   });
 
@@ -198,8 +206,7 @@ io.on("connection", function (socket) {
       username: socket.username,
       socketID: socket.id,
       avatarID: socket.avatarID,
-      pointCount: 10,
-      leader: false,
+      pointCount: 0,
     };
     let response = roomStore.joinRoom(roomID, newUser);
     if (response.status === "success") {
@@ -211,7 +218,10 @@ io.on("connection", function (socket) {
         response,
         users: room.users,
         isGameStarted: room.isGameStarted,
+        isRoundStarted: room.isRoundStarted,
         gameCounter: room.gameCounter,
+        messages: room.messages,
+        leaderID: room.roomLeaderID,
       });
     } else {
       callback({response});
@@ -227,6 +237,7 @@ io.on("connection", function (socket) {
 
 http.listen(PORT, () => {
   console.log("Server has been started on " + PORT);
+  
 });
 
 const socketLeaveRoom = (socket) => {
@@ -240,7 +251,10 @@ const socketLeaveRoom = (socket) => {
           if (!room.users.find((user) => user.userID === socket.userID)) {
             let users = room.users;
             if (users.length) {
-              broadcastToUsers(users, "room:userLeave", users);
+              if (room.roomLeaderID === removedUser.userID) {
+                roomEndRound(room.roomID);
+              }
+                broadcastToUsers(users, "room:userLeave", users);
             } else {
               roomStore.removeRoom(roomID);
             }
@@ -255,7 +269,39 @@ const socketLeaveRoom = (socket) => {
 }
 
 const broadcastToUsers = (users, event, data = null) => {
-  users.forEach((user) => {
-    io.to(user.socketID).emit(event, data);
-  });
+  if (users) {
+    users.forEach((user) => {
+      io.to(user.socketID).emit(event, data);
+    });
+  }
 };
+
+const roomEndRound = (roomID, winner = null) => {
+  let room = roomStore.getRoom(roomID);
+  let users = room.users;
+
+  room.isRoundStarted = false;
+  roomStore.changeLeader(roomID);
+  clearInterval(room.timer);
+
+  broadcastToUsers(users, "game:endRound", {
+    users: room.users,
+    leaderID: room.roomLeaderID,
+    word: room.roomWord,
+    winner,
+  });
+
+}
+
+const saveImage = (img, socket) => {
+  try {
+    const data = img.img.replace("data:image/png;base64,", "");
+    fs.writeFileSync(
+      path.resolve(__dirname, "files", `${socket.roomID}.jpg`),
+      data,
+      "base64"
+    );
+  } catch (e) {
+    console.log(e);
+  }
+}
