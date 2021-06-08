@@ -28,7 +28,7 @@ const io = new Server(http, {
 app.use(cors());
 
 app.get('/', (req, res) => {
-  res.send("Privet");
+  res.send("Privet server v.02");
 })
 
 io.use((socket, next) => {
