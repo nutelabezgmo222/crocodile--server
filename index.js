@@ -21,7 +21,7 @@ const roomStore = new InMemoryRoomStore();
 
 const io = new Server(http, {
   cors: {
-    origin: "https://crocodile-client-nutelabezgmo222.vercel.app",
+    origin: "*",
   },
 });
 
