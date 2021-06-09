@@ -77,6 +77,19 @@ io.on("connection", function (socket) {
     broadcastToUsers(room.users, "draw", figure);
   })
 
+  socket.on("user:infoChange", data => {
+    switch (data.type) {
+      case "username": {
+        socket.username = data.value;
+        break;
+      }
+      case "avatarID": {
+        socket.avatarID = data.value;
+        break;
+      }
+    }
+  });
+
   socket.on("room:getInfo", callback => {
     callback(roomStore);
   });
@@ -165,6 +178,7 @@ io.on("connection", function (socket) {
     }, 1000);
 
   });
+
   socket.on("game:checkWord", (msg) => {
     let roomID = socket.roomID;
     let room = roomStore.getRoom(roomID);
@@ -174,6 +188,18 @@ io.on("connection", function (socket) {
     broadcastToUsers(users, "game:newMessage", msg);
 
     if (room.roomWord === msg.text) {
+      
+      let userID = socket.userID;
+      let leaderID = room.roomLeaderID;
+      let leader = users.find(user => user.userID === leaderID);
+      let user = users.find(user => user.userID === userID);
+      if (leader) {
+        leader.pointCount += +15;
+      }
+      if (user) {
+        user.pointCount += +10;
+      }
+      
       roomEndRound(room.roomID, socket.username);
     }
   });
@@ -188,6 +214,7 @@ io.on("connection", function (socket) {
       broadcastToUsers(users, "room:userLeave", users);
     }
   });
+
   socket.on("room:host", (callback) => {
     let roomID = roomStore.createNewRoom({
       userID: socket.userID,
@@ -196,10 +223,12 @@ io.on("connection", function (socket) {
     }, true); // true => room opened
     callback(roomID)
   })
+
   socket.on("room:isRoomExist", (room, callback) => {
     let response = roomStore.isRoomAvailable(room.roomID);
     callback(response);
   });
+
   socket.on("room:join", ({roomID}, callback) => {
     let newUser = {
       userID: socket.userID,
@@ -246,7 +275,7 @@ const socketLeaveRoom = (socket) => {
     let room = roomStore.getRoom(roomID);
     let removedUser = roomStore.leaveRoom(roomID, socket.userID);
     if (removedUser) {
-      let timer = setTimeout(() => {
+      setTimeout(() => {
         if (room.users) {
           if (!room.users.find((user) => user.userID === socket.userID)) {
             let users = room.users;
