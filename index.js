@@ -21,14 +21,14 @@ const roomStore = new InMemoryRoomStore();
 
 const io = new Server(http, {
   cors: {
-    origin: "https://crocodile-client.vercel.app",
+    origin: "https://crocodile-client-nutelabezgmo222.vercel.app",
   },
 });
 
 app.use(cors());
 
 app.get('/', (req, res) => {
-  res.send("Privet server v.02");
+  res.send("Privet server v.05");
 })
 
 io.use((socket, next) => {
